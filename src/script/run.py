@@ -254,7 +254,11 @@ if __name__ == "__main__":
     data_manager = Data('./data')
 
     data_manager.load_data(config.data_name)
-    data_manager.process_data(n_top_genes=config.n_top_genes, split_method=config.split_method, fold=config.fold, use_negative_edge=config.use_negative_edge, k=config.topk)
+    data_manager.process_data(n_top_genes=config.n_top_genes, infer_top_gene=config.infer_top_gene,
+                               split_method=config.split_method, fold=config.fold,
+                               use_negative_edge=config.use_negative_edge, k=config.topk,
+                               condition_col=config.condition_col, control_value=config.control_value,
+                               preprocessed=config.preprocessed)
     train_sampler, valid_sampler, test_dl = data_manager.load_flow_data(batch_size=config.batch_size)
     
     train_dataset = PerturbationDataset(train_sampler, config.batch_size)

@@ -29,12 +29,14 @@ class Data:
         
     def load_data(self, data_name = None, data_path = None):
         self.data_name = data_name
-        if data_name in ['norman', 'norman_umi_go_filtered',]:
-            self.adata = sc.read_h5ad(os.path.join(self.data_path, data_name + '.h5ad'))
-        elif data_name in ['combosciplex', ]:
+        if data_name in ['norman', 'norman_umi_go_filtered', 'combosciplex']:
             self.adata = sc.read_h5ad(os.path.join(self.data_path, data_name + '.h5ad'))
         else:
-            raise ValueError(data_name + ' is not a valid data name')
+            # Generic: load any h5ad by filename from data_path
+            h5ad_path = os.path.join(self.data_path, data_name + '.h5ad')
+            if not os.path.exists(h5ad_path):
+                raise FileNotFoundError(f'H5AD file not found: {h5ad_path}')
+            self.adata = sc.read_h5ad(h5ad_path)
         
     def process_data(self, n_top_genes = 2000,infer_top_gene=1000,split_method='additive',
                      use_negative_edge=True, k=30,
@@ -219,8 +221,97 @@ class Data:
             self.perturbation_dict = {perturbation: i for i, perturbation in enumerate(unique_perturbation)}
             
         else:
-            raise ValueError(self.data_name + ' is not a valid data name')
-        
+            # ── Generic branch: STATE-format h5ad (single-gene CRISPR or similar) ──
+            condition_col  = kwargs.get('condition_col',  'gene')
+            control_value  = kwargs.get('control_value',  'non-targeting')
+            preprocessed   = kwargs.get('preprocessed',   True)
+
+            # 1. Canonicalise condition labels
+            def _canonicalise(cond):
+                if cond == control_value:
+                    return 'control'
+                # Single-gene label (no '+') → "GENE+control"
+                if '+' not in cond:
+                    return cond + '+control'
+                return cond
+
+            self.adata.obs['condition'] = self.adata.obs[condition_col].astype(str).map(_canonicalise)
+            self.adata.obs['control']   = (self.adata.obs['condition'] == 'control').astype(int)
+            self.adata.obs['is_control'] = self.adata.obs['control'] == 1
+            self.adata.obs['Drug1'] = self.adata.obs['condition'].str.split('+').apply(lambda x: x[0])
+            self.adata.obs['Drug2'] = self.adata.obs['condition'].str.split('+').apply(lambda x: x[-1])
+
+            # 2. Normalise only when raw counts provided
+            if not preprocessed:
+                self.adata.X = self.adata.layers['counts'].copy() if 'counts' in self.adata.layers else self.adata.X.copy()
+                sc.pp.normalize_total(self.adata)
+                sc.pp.log1p(self.adata)
+
+            # 3. HVG selection
+            sc.pp.highly_variable_genes(self.adata, inplace=True, n_top_genes=n_top_genes)
+
+            # 4. Force perturbation gene names into HVG (needed for 'crisper' mode vocab)
+            unique_perturbation_parts = []
+            for cond in self.adata.obs['condition'].unique():
+                unique_perturbation_parts.extend(cond.split('+'))
+            unique_perturbation_parts = set(unique_perturbation_parts) - {'control'}
+            for gene in unique_perturbation_parts:
+                if gene in self.adata.var_names:
+                    self.adata.var.loc[gene, 'highly_variable'] = True
+                else:
+                    print(f"Warning: perturbation gene '{gene}' not found in var_names")
+
+            self.adata = self.adata[:, self.adata.var['highly_variable']]
+
+            # 5. Train/test split (all non-"control" unique conditions are candidates)
+            os.makedirs(os.path.join(self.data_path, self.data_name), exist_ok=True)
+
+            if split_method in ('additive', 'combinations'):
+                split_file = os.path.join(self.data_path, self.data_name, 'split_results.pkl')
+            else:
+                split_file = os.path.join(self.data_path, self.data_name, 'split_results_unseen.pkl')
+
+            if os.path.exists(split_file):
+                with open(split_file, 'rb') as f:
+                    self.split_results = pickle.load(f)
+            else:
+                all_conditions = np.unique(self.adata.obs['condition'])
+                non_control = [c for c in all_conditions if c != 'control']
+                self.split_results = []
+                for i in range(5):
+                    np.random.seed(42 + i)
+                    shuffled = np.array(non_control.copy())
+                    np.random.shuffle(shuffled)
+                    split_idx = int(len(shuffled) * 0.3)
+                    self.split_results.append({
+                        'train': shuffled[split_idx:].tolist(),
+                        'test':  shuffled[:split_idx].tolist(),
+                    })
+                with open(split_file, 'wb') as f:
+                    pickle.dump(self.split_results, f)
+                print('split results saved')
+
+            fold = kwargs.get('fold', 0)
+            self.adata.obs['mode'] = 'train'
+            self.adata.obs.loc[
+                self.adata.obs['condition'].isin(self.split_results[fold]['test']), 'mode'
+            ] = 'test'
+
+            self.adata_train = self.adata[self.adata.obs['mode'] == 'train']
+            self.adata_test  = self.adata[
+                (self.adata.obs['mode'] == 'test') | (self.adata.obs['control'] == 1)
+            ]
+
+            sc.pp.highly_variable_genes(self.adata_test, inplace=True, n_top_genes=infer_top_gene)
+            self.adata_test = self.adata_test[:, self.adata_test.var['highly_variable']]
+
+            condition = np.unique(self.adata.obs['condition'])
+            unique_perturbation = []
+            np.array([unique_perturbation.extend(c.split('+')) for c in condition])
+            unique_perturbation = sorted(set(unique_perturbation))
+            self.unique_perturbation = unique_perturbation
+            self.perturbation_dict = {p: i for i, p in enumerate(unique_perturbation)}
+
         if 'fold' in kwargs.keys():
             fold = kwargs['fold']
         else:
@@ -255,8 +346,10 @@ class Data:
             test_sampler = TestDataset(self.data_name, self.adata_test, ["Drug1", "Drug2"], self.perturbation_dict)
             return train_sampler , test_sampler, []
         else:
-            raise ValueError(self.data_name + ' is not a valid data name')
-            
+            # Generic: same TrainSampler/TestDataset as Norman
+            train_sampler = TrainSampler(self.data_name, self.adata_train, ["Drug1", "Drug2"], self.perturbation_dict)
+            test_sampler  = TestDataset(self.data_name, self.adata_test,  ["Drug1", "Drug2"], self.perturbation_dict)
+            return train_sampler, test_sampler, []
 
     def pretrain_data(self, batch_size = 128):
         if self.data_name == 'combosciplex':

@@ -37,10 +37,15 @@ class FlowConfig:
     use_negative_edge: bool = False
     topk: int = 15
     
+    # Generic dataset support (STATE-prepared h5ad files)
+    condition_col: str = 'gene'           # obs column holding perturbation labels
+    control_value: str = 'non-targeting'  # value in condition_col meaning "unperturbed"
+    preprocessed: bool = True             # True = X is already log1p-normalized; skip normalization
+
     def __post_init__(self):
         if self.data_name == 'norman_umi_go_filtered':
             self.n_top_genes = 5054
-        if self.data_name == 'norman':
+        elif self.data_name == 'norman':
             self.n_top_genes = 5000
         path = self.make_path()
 
