@@ -38,6 +38,7 @@ class FlowConfig:
     topk: int = 15
     
     # Generic dataset support (STATE-prepared h5ad files)
+    data_path: str = './data'             # directory containing <data_name>.h5ad
     condition_col: str = 'gene'           # obs column holding perturbation labels
     control_value: str = 'non-targeting'  # value in condition_col meaning "unperturbed"
     preprocessed: bool = True             # True = X is already log1p-normalized; skip normalization

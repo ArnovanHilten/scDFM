@@ -251,7 +251,7 @@ if __name__ == "__main__":
         os.makedirs(save_path, exist_ok=True)
     device = accelerator.device
     
-    data_manager = Data('./data')
+    data_manager = Data(config.data_path)
 
     data_manager.load_data(config.data_name)
     data_manager.process_data(n_top_genes=config.n_top_genes, infer_top_gene=config.infer_top_gene,
