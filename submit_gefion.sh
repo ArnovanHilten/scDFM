@@ -29,6 +29,7 @@ echo "NODELIST=${SLURM_NODELIST}"
 echo "DATASET=${DATASET}  FOLD=${FOLD}"
 
 micromamba run -n sc \
+  env PYTHONNOUSERSITE=1 PYTHONPATH=/workspace/scDFM \
   python src/script/run.py \
     --data_name="${DATASET}" \
     --data_path="${DATA_PATH}" \
