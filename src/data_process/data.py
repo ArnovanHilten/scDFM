@@ -368,13 +368,14 @@ class TrainSampler:
         self.adata = adata
         self.perturbation_covariates = perturbation_covariates
         self.adata.obs['perturbation_covariates'] = self.adata.obs[perturbation_covariates].apply(lambda x: '+'.join(x), axis=1)
-        self._perturbation_covariates = adata.obs['perturbation_covariates'].unique()
-        
+        self._perturbation_covariates = np.array(adata.obs['perturbation_covariates'].unique())
+
         self._perturbation_covariates = self._perturbation_covariates[self._perturbation_covariates != 'control+control']
-        
+
+        self._perturbation_covariates = list(self._perturbation_covariates)
         self._perturbation_covariates.sort()
         self.perturbation_covariates_dict = {perturbation: i for i, perturbation in enumerate(self._perturbation_covariates)}
-        
+
         perturbation_covariates_id = [adata.obs[perturbation_covariates[i]].apply(lambda x: perturbation_dict[x])
                                     for i in range(len(perturbation_covariates))]
         self.perturbation_covariates_id = np.array(perturbation_covariates_id).T
@@ -420,13 +421,14 @@ class TestDataset:
         self.adata = adata
         self.perturbation_covariates = perturbation_covariates
         self.adata.obs['perturbation_covariates'] = self.adata.obs[perturbation_covariates].apply(lambda x: '+'.join(x), axis=1)
-        self._perturbation_covariates = adata.obs['perturbation_covariates'].unique()
-        
+        self._perturbation_covariates = np.array(adata.obs['perturbation_covariates'].unique())
+
         self._perturbation_covariates = self._perturbation_covariates[self._perturbation_covariates != 'control+control']
-        
+
+        self._perturbation_covariates = list(self._perturbation_covariates)
         self._perturbation_covariates.sort()
         self.perturbation_covariates_dict = {perturbation: i for i, perturbation in enumerate(self._perturbation_covariates)}
-        
+
         perturbation_covariates_id = [adata.obs[perturbation_covariates[i]].apply(lambda x: perturbation_dict[x])
                                     for i in range(len(perturbation_covariates))]
         self.perturbation_covariates_id = np.array(perturbation_covariates_id).T

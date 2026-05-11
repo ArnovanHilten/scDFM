@@ -35,7 +35,7 @@ micromamba run -n sc \
     --data_path="${DATA_PATH}" \
     --condition_col="gene" \
     --control_value="non-targeting" \
-    --preprocessed="True" \
+    --preprocessed \
     --fold=${FOLD} \
     --model_type=origin \
     --n_top_genes=5000 \
