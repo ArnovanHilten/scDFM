@@ -1,24 +1,28 @@
 #!/bin/bash
 #SBATCH --job-name=scdfm_emb_replogle
 #SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=32
 #SBATCH --account=cu_0055
 #SBATCH --gres=gpu:1
 #SBATCH --time=48:00:00
 #SBATCH --mem=400GB
 #SBATCH --output=scdfm_%j.log
-#SBATCH --container-image=/home/hilarn/55_cu_0055/dockers/dcai_test+docker_test+scdfm.sqsh
+#SBATCH --container-image=/dcai/projects/cu_0055/dockers/latest/dcai_test+docker_test+scdfm.sqsh
 #SBATCH --container-mounts=/dcai:/dcai,/etc/ssl/certs:/etc/ssl/certs
 #SBATCH --container-workdir=/workspace/scDFM
 
 # ── Configure per run ─────────────────────────────────────────────────────────
 DATASET="emb_Replogle"
 DATA_PATH="/dcai/projects/cu_0055/data/perturbseq/silver/processed_data_filtered/Replogle"
-RESULT_PATH="/dcai/projects/cu_0055/code/scdfm/results"
+RESULT_PATH="/dcai/users/hilarn/55_cu_0055/code/baselines/scDFM/results"
 FOLD=0
 GPU=0
 # ─────────────────────────────────────────────────────────────────────────────
 
 unset LMOD_CMD
+export PYTHONPATH=/workspace/scDFM
+export PYTHONNOUSERSITE=1
 export CUDA_DEVICE_ORDER=PCI_BUS_ID
 
 echo "NODELIST=${SLURM_NODELIST}"
@@ -48,3 +52,4 @@ micromamba run -n sc \
     --split_method=additive \
     --result_path="${RESULT_PATH}" \
     --print_every=5000
+
