@@ -208,6 +208,14 @@ def test(data_sampler, vf, accelerator,  batch_size=128, path='./',vocab=None,sc
         eval_score = pick_eval_score(agg_results, scheme)
         print(f"Current evaluation score: {eval_score:.4f}")
 
+        try:
+            import wandb
+            if wandb.run is not None:
+                agg_dict = agg_results.to_pandas().iloc[0].to_dict()
+                wandb.log({f'eval/{k}': v for k, v in agg_dict.items() if isinstance(v, (int, float))})
+        except Exception:
+            pass
+
     return eval_score, skipped
 
 def wrapped_vf(target,t,source,perturbation_id,vf,gene_ids, gene_all):
@@ -256,6 +264,21 @@ if __name__ == "__main__":
         import dataclasses, json
         with open(os.path.join(save_path, 'config.json'), 'w') as f:
             json.dump(dataclasses.asdict(config), f, indent=2)
+
+        # ── Weights & Biases ──────────────────────────────────────────────
+        if config.wandb_project:
+            try:
+                import wandb
+                wandb.init(
+                    project=config.wandb_project,
+                    entity=config.wandb_entity or None,
+                    name=config.wandb_name or os.path.basename(save_path),
+                    tags=[t.strip() for t in config.wandb_tags.split(',') if t.strip()],
+                    config=dataclasses.asdict(config),
+                    dir=save_path,
+                )
+            except Exception as e:
+                print(f"Warning: wandb init failed ({e}). Continuing without W&B.")
     device = accelerator.device
     
     data_manager = Data(config.data_path)
@@ -346,8 +369,23 @@ if __name__ == "__main__":
                     )
                 eval_score, newly_skipped = test(valid_sampler, vf, accelerator, batch_size=config.batch_size, path=save_path_,vocab=vocab)
                 skipped_perturbations.update(newly_skipped)
+                if accelerator.is_main_process and config.wandb_project and eval_score is not None:
+                    try:
+                        import wandb
+                        if wandb.run is not None:
+                            wandb.log({'eval/score': eval_score}, step=iteration)
+                    except Exception:
+                        pass
                 
             accelerator.wait_for_everyone()
+
+            if accelerator.is_main_process and config.wandb_project:
+                try:
+                    import wandb
+                    if wandb.run is not None:
+                        wandb.log({'train/loss': loss.item()}, step=iteration)
+                except Exception:
+                    pass
 
             pbar.update(1)
             pbar.set_description(f'loss: {loss.item():.4f}, iteration: {iteration}')
@@ -357,5 +395,13 @@ if __name__ == "__main__":
         print(f"\n=== {len(skipped_perturbations)} test perturbation(s) skipped during eval (gene not in expression matrix after HVG filtering) ===")
         for p in sorted(skipped_perturbations):
             print(f"  {p}")
+
+    if accelerator.is_main_process and config.wandb_project:
+        try:
+            import wandb
+            if wandb.run is not None:
+                wandb.finish()
+        except Exception:
+            pass
             
             

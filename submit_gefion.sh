@@ -19,12 +19,18 @@ RESULT_PATH="/dcai/users/hilarn/55_cu_0055/code/baselines/scDFM/results"
 SPLIT_TOML="/dcai/users/hilarn/55_cu_0055/code/baselines/scDFM/SE_R_k562_example.toml"
 FOLD=0
 GPU=0
+RUN_ID=""        # optional: set to e.g. "run01" for a human-readable folder name
 # ─────────────────────────────────────────────────────────────────────────────
 
 unset LMOD_CMD
 export PYTHONPATH=/workspace/scDFM
 export PYTHONNOUSERSITE=1
 export CUDA_DEVICE_ORDER=PCI_BUS_ID
+
+# W&B — private Gefion server
+export WANDB_BASE_URL="https://wandb.gefion.dcai.dk"
+export SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
+export REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
 
 echo "NODELIST=${SLURM_NODELIST}"
 echo "DATASET=${DATASET}  FOLD=${FOLD}"
@@ -54,5 +60,8 @@ micromamba run -n sc \
     --mode=predict_y \
     --split_method=additive \
     --result_path="${RESULT_PATH}" \
-    --print_every=5000
-
+    --print_every=5000 \
+    --run_id="${RUN_ID}" \
+    --wandb_project="scdfm_baselines" \
+    --wandb_entity="cu_0055" \
+    --wandb_tags="scdfm,${DATASET},fold${FOLD}"

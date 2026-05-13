@@ -47,6 +47,12 @@ class FlowConfig:
     split_toml: str = ''                  # path to STATE toml; if set, use its fewshot test list instead of random split
     run_id: str = ''                      # optional human label (e.g. "run01"); overrides auto name when set
 
+    # Weights & Biases
+    wandb_project: str = ''              # W&B project name; leave empty to disable W&B
+    wandb_entity: str = ''              # W&B entity (team / username)
+    wandb_name: str = ''                # run display name; defaults to result folder name
+    wandb_tags: str = ''                # comma-separated tags e.g. "scdfm,baseline,fold0"
+
     def __post_init__(self):
         if self.data_name == 'norman_umi_go_filtered':
             self.n_top_genes = 5054
