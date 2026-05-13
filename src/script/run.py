@@ -131,6 +131,7 @@ def train_step(source, target, perturbation_id, vf, criterion, accelerator, nois
 
 @torch.inference_mode()
 def test(data_sampler, vf, accelerator,  batch_size=128, path='./',vocab=None,scheme='mse'):
+    skipped = set()
     gene_ids_test = vocab.encode(list(data_sampler.adata.var_names))
     
     gene_ids_test = torch.tensor(gene_ids_test, dtype=torch.long, device=device)
@@ -152,7 +153,7 @@ def test(data_sampler, vf, accelerator,  batch_size=128, path='./',vocab=None,sc
         if config.perturbation_function == 'crisper':
             perturbation_name_crisper = [inverse_dict[int(p_id)] for p_id in perturbation_id[0].cpu().numpy()]
             if not all(g in vocab.stoi for g in perturbation_name_crisper):
-                print(f'Skipping {perturbation_name}: perturbation gene not in vocab')
+                skipped.add(perturbation_name)
                 continue
             perturbation_id = torch.tensor(vocab.encode(perturbation_name_crisper), dtype=torch.long, device=device)
             perturbation_id = perturbation_id.repeat(source.shape[0],1)
@@ -206,8 +207,8 @@ def test(data_sampler, vf, accelerator,  batch_size=128, path='./',vocab=None,sc
 
         eval_score = pick_eval_score(agg_results, scheme)
         print(f"Current evaluation score: {eval_score:.4f}")
-    
-    return eval_score
+
+    return eval_score, skipped
 
 def wrapped_vf(target,t,source,perturbation_id,vf,gene_ids, gene_all):
     
@@ -261,7 +262,7 @@ if __name__ == "__main__":
                                split_method=config.split_method, fold=config.fold,
                                use_negative_edge=config.use_negative_edge, k=config.topk,
                                condition_col=config.condition_col, control_value=config.control_value,
-                               preprocessed=config.preprocessed)
+                               preprocessed=config.preprocessed, split_toml=config.split_toml)
     train_sampler, valid_sampler, test_dl = data_manager.load_flow_data(batch_size=config.batch_size)
     
     train_dataset = PerturbationDataset(train_sampler, config.batch_size)
@@ -301,13 +302,7 @@ if __name__ == "__main__":
     optimizer, scheduler, dataloader = accelerator.prepare(optimizer,scheduler,dataloader)
     inverse_dict = {v: str(k) for k, v in data_manager.perturbation_dict.items()}
 
-    # Identify test perturbations that will be skipped because their gene is not in the vocab
-    skipped_perturbations = [
-        p for p in valid_sampler._perturbation_covariates
-        if not all(g in vocab.stoi for g in p.split('+'))
-    ]
-    if accelerator.is_main_process and skipped_perturbations:
-        print(f"Note: {len(skipped_perturbations)} test perturbation(s) will be skipped during eval (gene not in vocab). Full list printed at end of training.")
+    skipped_perturbations = set()  # accumulated across all eval calls; printed at end
 
     pbar = tqdm.tqdm(total=config.steps, initial=start_iteration)
     iteration = start_iteration
@@ -346,7 +341,8 @@ if __name__ == "__main__":
                         save_path=save_path_, 
                         is_best=False
                     )
-                eval_score = test(valid_sampler, vf, accelerator, batch_size=config.batch_size, path=save_path_,vocab=vocab)
+                eval_score, newly_skipped = test(valid_sampler, vf, accelerator, batch_size=config.batch_size, path=save_path_,vocab=vocab)
+                skipped_perturbations.update(newly_skipped)
                 
             accelerator.wait_for_everyone()
 

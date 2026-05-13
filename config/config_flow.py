@@ -42,6 +42,7 @@ class FlowConfig:
     condition_col: str = 'gene'           # obs column holding perturbation labels
     control_value: str = 'non-targeting'  # value in condition_col meaning "unperturbed"
     preprocessed: bool = True             # True = X is already log1p-normalized; skip normalization
+    split_toml: str = ''                  # path to STATE toml; if set, use its fewshot test list instead of random split
 
     def __post_init__(self):
         if self.data_name == 'norman_umi_go_filtered':

@@ -263,33 +263,58 @@ class Data:
 
             self.adata = self.adata[:, self.adata.var['highly_variable']]
 
-            # 5. Train/test split (all non-"control" unique conditions are candidates)
+            # 5. Train/test split
             os.makedirs(os.path.join(self.data_path, self.data_name), exist_ok=True)
+            split_toml = kwargs.get('split_toml', '')
 
-            if split_method in ('additive', 'combinations'):
-                split_file = os.path.join(self.data_path, self.data_name, 'split_results.pkl')
+            if split_toml:
+                # Use the explicit test-perturbation list from a STATE toml file
+                split_file = os.path.join(self.data_path, self.data_name, 'split_results_toml.pkl')
+                if os.path.exists(split_file):
+                    with open(split_file, 'rb') as f:
+                        self.split_results = pickle.load(f)
+                else:
+                    import tomllib
+                    with open(split_toml, 'rb') as f:
+                        toml_data = tomllib.load(f)
+                    test_genes = set()
+                    for val in toml_data.get('fewshot', {}).values():
+                        if isinstance(val, dict) and 'test' in val:
+                            test_genes.update(val['test'])
+                    all_conditions = np.unique(self.adata.obs['condition'])
+                    non_control = [c for c in all_conditions if c != 'control']
+                    test_conditions  = [c for c in non_control if c.split('+')[0] in test_genes]
+                    train_conditions = [c for c in non_control if c not in set(test_conditions)]
+                    print(f'STATE toml split: {len(train_conditions)} train / {len(test_conditions)} test perturbations')
+                    self.split_results = [{'train': train_conditions, 'test': test_conditions}]
+                    with open(split_file, 'wb') as f:
+                        pickle.dump(self.split_results, f)
             else:
-                split_file = os.path.join(self.data_path, self.data_name, 'split_results_unseen.pkl')
+                # Random 70/30 split, 5 folds
+                if split_method in ('additive', 'combinations'):
+                    split_file = os.path.join(self.data_path, self.data_name, 'split_results.pkl')
+                else:
+                    split_file = os.path.join(self.data_path, self.data_name, 'split_results_unseen.pkl')
 
-            if os.path.exists(split_file):
-                with open(split_file, 'rb') as f:
-                    self.split_results = pickle.load(f)
-            else:
-                all_conditions = np.unique(self.adata.obs['condition'])
-                non_control = [c for c in all_conditions if c != 'control']
-                self.split_results = []
-                for i in range(5):
-                    np.random.seed(42 + i)
-                    shuffled = np.array(non_control.copy())
-                    np.random.shuffle(shuffled)
-                    split_idx = int(len(shuffled) * 0.3)
-                    self.split_results.append({
-                        'train': shuffled[split_idx:].tolist(),
-                        'test':  shuffled[:split_idx].tolist(),
-                    })
-                with open(split_file, 'wb') as f:
-                    pickle.dump(self.split_results, f)
-                print('split results saved')
+                if os.path.exists(split_file):
+                    with open(split_file, 'rb') as f:
+                        self.split_results = pickle.load(f)
+                else:
+                    all_conditions = np.unique(self.adata.obs['condition'])
+                    non_control = [c for c in all_conditions if c != 'control']
+                    self.split_results = []
+                    for i in range(5):
+                        np.random.seed(42 + i)
+                        shuffled = np.array(non_control.copy())
+                        np.random.shuffle(shuffled)
+                        split_idx = int(len(shuffled) * 0.3)
+                        self.split_results.append({
+                            'train': shuffled[split_idx:].tolist(),
+                            'test':  shuffled[:split_idx].tolist(),
+                        })
+                    with open(split_file, 'wb') as f:
+                        pickle.dump(self.split_results, f)
+                    print('split results saved')
 
             fold = kwargs.get('fold', 0)
             self.adata.obs['mode'] = 'train'

@@ -16,6 +16,7 @@
 DATASET="emb_Replogle"
 DATA_PATH="/dcai/projects/cu_0055/data/perturbseq/silver/processed_data_filtered/Replogle"
 RESULT_PATH="/dcai/users/hilarn/55_cu_0055/code/baselines/scDFM/results"
+SPLIT_TOML="/dcai/users/hilarn/55_cu_0055/code/baselines/scDFM/SE_R_k562_example.toml"
 FOLD=0
 GPU=0
 # ─────────────────────────────────────────────────────────────────────────────
@@ -36,6 +37,7 @@ micromamba run -n sc \
     --condition_col="gene" \
     --control_value="non-targeting" \
     --preprocessed \
+    --split_toml="${SPLIT_TOML}" \
     --fold=${FOLD} \
     --model_type=origin \
     --n_top_genes=5000 \
