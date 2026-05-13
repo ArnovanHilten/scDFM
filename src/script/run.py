@@ -151,6 +151,9 @@ def test(data_sampler, vf, accelerator,  batch_size=128, path='./',vocab=None,sc
         perturbation_id = perturbation_id.to(device)
         if config.perturbation_function == 'crisper':
             perturbation_name_crisper = [inverse_dict[int(p_id)] for p_id in perturbation_id[0].cpu().numpy()]
+            if not all(g in vocab.stoi for g in perturbation_name_crisper):
+                print(f'Skipping {perturbation_name}: perturbation gene not in vocab')
+                continue
             perturbation_id = torch.tensor(vocab.encode(perturbation_name_crisper), dtype=torch.long, device=device)
             perturbation_id = perturbation_id.repeat(source.shape[0],1)
         
@@ -297,6 +300,15 @@ if __name__ == "__main__":
     vf = accelerator.prepare(vf)
     optimizer, scheduler, dataloader = accelerator.prepare(optimizer,scheduler,dataloader)
     inverse_dict = {v: str(k) for k, v in data_manager.perturbation_dict.items()}
+
+    # Identify test perturbations that will be skipped because their gene is not in the vocab
+    skipped_perturbations = [
+        p for p in valid_sampler._perturbation_covariates
+        if not all(g in vocab.stoi for g in p.split('+'))
+    ]
+    if accelerator.is_main_process and skipped_perturbations:
+        print(f"Note: {len(skipped_perturbations)} test perturbation(s) will be skipped during eval (gene not in vocab). Full list printed at end of training.")
+
     pbar = tqdm.tqdm(total=config.steps, initial=start_iteration)
     iteration = start_iteration
     while iteration < config.steps:
@@ -337,9 +349,14 @@ if __name__ == "__main__":
                 eval_score = test(valid_sampler, vf, accelerator, batch_size=config.batch_size, path=save_path_,vocab=vocab)
                 
             accelerator.wait_for_everyone()
-            
+
             pbar.update(1)
             pbar.set_description(f'loss: {loss.item():.4f}, iteration: {iteration}')
             iteration += 1
+
+    if accelerator.is_main_process and skipped_perturbations:
+        print(f"\n=== {len(skipped_perturbations)} test perturbation(s) skipped during eval (gene not in expression matrix after HVG filtering) ===")
+        for p in sorted(skipped_perturbations):
+            print(f"  {p}")
             
             
