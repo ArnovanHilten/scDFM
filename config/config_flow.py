@@ -1,5 +1,7 @@
 
 from dataclasses import dataclass
+import hashlib
+import json
 import os
 @dataclass
 class FlowConfig:
@@ -43,6 +45,7 @@ class FlowConfig:
     control_value: str = 'non-targeting'  # value in condition_col meaning "unperturbed"
     preprocessed: bool = True             # True = X is already log1p-normalized; skip normalization
     split_toml: str = ''                  # path to STATE toml; if set, use its fewshot test list instead of random split
+    run_id: str = ''                      # optional human label (e.g. "run01"); overrides auto name when set
 
     def __post_init__(self):
         if self.data_name == 'norman_umi_go_filtered':
@@ -52,20 +55,23 @@ class FlowConfig:
         path = self.make_path()
 
     def make_path(self):
-        exp_name = '-'.join(['flow', 
-                             f'fusion_{self.fusion_method}',
-                            f'{self.data_name}', 
-                            self.model_type, 
-                            self.mode, 
-                            f'gamma_{self.gamma}',
-                            f'perturbation_function_{self.perturbation_function}',
-                            f'lr_{self.lr}', 
-                            f'dim_model_{self.d_model}', 
-                            f'infer_top_gene_{self.infer_top_gene}',
-                            f'split_method_{self.split_method}',
-                            f'use_mmd_loss_{self.use_mmd_loss}',
-                            f'fold_{self.fold}',
-                            f'use_negative_edge_{self.use_negative_edge}',
-                            f'topk_{self.topk}',
-                            ])
-        return os.path.join(self.result_path, exp_name)
+        # Short hash of the parameters that actually affect model behaviour
+        key = {
+            'data_name': self.data_name,
+            'model_type': self.model_type,
+            'fusion_method': self.fusion_method,
+            'd_model': self.d_model,
+            'lr': self.lr,
+            'fold': self.fold,
+            'n_top_genes': self.n_top_genes,
+            'perturbation_function': self.perturbation_function,
+            'split_method': self.split_method,
+            'split_toml': os.path.basename(self.split_toml),
+            'mode': self.mode,
+        }
+        h = hashlib.md5(json.dumps(key, sort_keys=True).encode()).hexdigest()[:8]
+        if self.run_id:
+            name = f'{self.run_id}_{self.data_name}_fold{self.fold}'
+        else:
+            name = f'{self.data_name}_fold{self.fold}_{h}'
+        return os.path.join(self.result_path, name)

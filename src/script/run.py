@@ -253,6 +253,9 @@ if __name__ == "__main__":
         print(config)
         save_path = config.make_path()
         os.makedirs(save_path, exist_ok=True)
+        import dataclasses, json
+        with open(os.path.join(save_path, 'config.json'), 'w') as f:
+            json.dump(dataclasses.asdict(config), f, indent=2)
     device = accelerator.device
     
     data_manager = Data(config.data_path)
