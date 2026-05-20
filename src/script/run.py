@@ -391,6 +391,25 @@ if __name__ == "__main__":
             pbar.set_description(f'loss: {loss.item():.4f}, iteration: {iteration}')
             iteration += 1
 
+    # ── Final evaluation on the held-out test set (only when val != test) ────────
+    if test_dl is not None:
+        final_path = os.path.join(save_path, 'final_test')
+        if accelerator.is_main_process:
+            os.makedirs(final_path, exist_ok=True)
+            print("\n=== Running final evaluation on held-out TEST set ===")
+        final_score, final_skipped = test(
+            test_dl, vf, accelerator,
+            batch_size=config.batch_size, path=final_path, vocab=vocab,
+        )
+        skipped_perturbations.update(final_skipped)
+        if accelerator.is_main_process and config.wandb_project and final_score is not None:
+            try:
+                import wandb
+                if wandb.run is not None:
+                    wandb.log({'test/score': final_score})
+            except Exception:
+                pass
+
     if accelerator.is_main_process and skipped_perturbations:
         print(f"\n=== {len(skipped_perturbations)} test perturbation(s) skipped during eval (gene not in expression matrix after HVG filtering) ===")
         for p in sorted(skipped_perturbations):

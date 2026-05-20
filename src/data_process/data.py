@@ -261,15 +261,16 @@ class Data:
                 else:
                     print(f"Warning: perturbation gene '{gene}' not found in var_names")
 
-            self.adata = self.adata[:, self.adata.var['highly_variable']]
+            self.adata = self.adata[:, self.adata.var['highly_variable']].copy()
 
             # 5. Train/test split
             os.makedirs(os.path.join(self.data_path, self.data_name), exist_ok=True)
             split_toml = kwargs.get('split_toml', '')
 
             if split_toml:
-                # Use the explicit test-perturbation list from a STATE toml file
-                split_file = os.path.join(self.data_path, self.data_name, 'split_results_toml.pkl')
+                # Use the explicit val/test perturbation lists from a STATE toml file
+                toml_stem  = os.path.splitext(os.path.basename(split_toml))[0]
+                split_file = os.path.join(self.data_path, self.data_name, f'split_results_{toml_stem}.pkl')
                 if os.path.exists(split_file):
                     with open(split_file, 'rb') as f:
                         self.split_results = pickle.load(f)
@@ -277,16 +278,28 @@ class Data:
                     import tomllib
                     with open(split_toml, 'rb') as f:
                         toml_data = tomllib.load(f)
+                    val_genes  = set()
                     test_genes = set()
-                    for val in toml_data.get('fewshot', {}).values():
-                        if isinstance(val, dict) and 'test' in val:
-                            test_genes.update(val['test'])
+                    for entry in toml_data.get('fewshot', {}).values():
+                        if isinstance(entry, dict):
+                            if 'val'  in entry:
+                                val_genes.update(entry['val'])
+                            if 'test' in entry:
+                                test_genes.update(entry['test'])
                     all_conditions = np.unique(self.adata.obs['condition'])
-                    non_control = [c for c in all_conditions if c != 'control']
-                    test_conditions  = [c for c in non_control if c.split('+')[0] in test_genes]
-                    train_conditions = [c for c in non_control if c not in set(test_conditions)]
-                    print(f'STATE toml split: {len(train_conditions)} train / {len(test_conditions)} test perturbations')
-                    self.split_results = [{'train': train_conditions, 'test': test_conditions}]
+                    non_control    = [c for c in all_conditions if c != 'control']
+                    val_conditions  = [c for c in non_control if c.split('+')[0] in val_genes]
+                    test_conditions = [c for c in non_control if c.split('+')[0] in test_genes]
+                    # genes that appear in both → keep in test only
+                    test_set = set(test_conditions)
+                    val_conditions = [c for c in val_conditions if c not in test_set]
+                    held_out = set(val_conditions) | test_set
+                    train_conditions = [c for c in non_control if c not in held_out]
+                    print(f'STATE toml split: {len(train_conditions)} train / '
+                          f'{len(val_conditions)} val / {len(test_conditions)} test perturbations')
+                    self.split_results = [{'train': train_conditions,
+                                           'val':   val_conditions,
+                                           'test':  test_conditions}]
                     with open(split_file, 'wb') as f:
                         pickle.dump(self.split_results, f)
             else:
@@ -317,15 +330,37 @@ class Data:
                     print('split results saved')
 
             fold = kwargs.get('fold', 0)
+            sr   = self.split_results[fold]
             self.adata.obs['mode'] = 'train'
+            if sr.get('val'):
+                self.adata.obs.loc[
+                    self.adata.obs['condition'].isin(sr['val']), 'mode'
+                ] = 'val'
             self.adata.obs.loc[
-                self.adata.obs['condition'].isin(self.split_results[fold]['test']), 'mode'
+                self.adata.obs['condition'].isin(sr['test']), 'mode'
             ] = 'test'
 
             self.adata_train = self.adata[self.adata.obs['mode'] == 'train']
-            self.adata_test  = self.adata[
+
+            # val set — used for periodic monitoring during training
+            val_pert_mask = self.adata.obs['mode'] == 'val'
+            if val_pert_mask.any():
+                self.adata_val = self.adata[val_pert_mask | (self.adata.obs['control'] == 1)]
+                self._has_separate_test = True
+            else:
+                # no explicit val split → monitor on test set (backward-compatible)
+                self.adata_val = self.adata[
+                    (self.adata.obs['mode'] == 'test') | (self.adata.obs['control'] == 1)
+                ]
+                self._has_separate_test = False
+
+            # test set — used for final evaluation only
+            self.adata_test = self.adata[
                 (self.adata.obs['mode'] == 'test') | (self.adata.obs['control'] == 1)
             ]
+
+            sc.pp.highly_variable_genes(self.adata_val, inplace=True, n_top_genes=infer_top_gene)
+            self.adata_val = self.adata_val[:, self.adata_val.var['highly_variable']]
 
             sc.pp.highly_variable_genes(self.adata_test, inplace=True, n_top_genes=infer_top_gene)
             self.adata_test = self.adata_test[:, self.adata_test.var['highly_variable']]
@@ -371,10 +406,14 @@ class Data:
             test_sampler = TestDataset(self.data_name, self.adata_test, ["Drug1", "Drug2"], self.perturbation_dict)
             return train_sampler , test_sampler, []
         else:
-            # Generic: same TrainSampler/TestDataset as Norman
+            # Generic: train, val (for periodic monitoring), test (for final eval)
             train_sampler = TrainSampler(self.data_name, self.adata_train, ["Drug1", "Drug2"], self.perturbation_dict)
-            test_sampler  = TestDataset(self.data_name, self.adata_test,  ["Drug1", "Drug2"], self.perturbation_dict)
-            return train_sampler, test_sampler, []
+            val_sampler   = TestDataset(self.data_name, self.adata_val,   ["Drug1", "Drug2"], self.perturbation_dict)
+            if getattr(self, '_has_separate_test', False):
+                test_sampler = TestDataset(self.data_name, self.adata_test, ["Drug1", "Drug2"], self.perturbation_dict)
+            else:
+                test_sampler = None
+            return train_sampler, val_sampler, test_sampler
 
     def pretrain_data(self, batch_size = 128):
         if self.data_name == 'combosciplex':
