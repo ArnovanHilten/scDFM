@@ -270,7 +270,7 @@ class Data:
             if split_toml:
                 # Use the explicit val/test perturbation lists from a STATE toml file
                 toml_stem  = os.path.splitext(os.path.basename(split_toml))[0]
-                split_file = os.path.join(self.data_path, self.data_name, f'split_results_{toml_stem}.pkl')
+                split_file = os.path.join(self.data_path, self.data_name, f'split_results_scdfm_{toml_stem}.pkl')
                 if os.path.exists(split_file):
                     with open(split_file, 'rb') as f:
                         self.split_results = pickle.load(f)
