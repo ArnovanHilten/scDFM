@@ -280,7 +280,8 @@ if __name__ == "__main__":
             except Exception as e:
                 print(f"Warning: wandb init failed ({e}). Continuing without W&B.")
     device = accelerator.device
-    
+    print(f"[device] accelerator.device={device}  torch.cuda.is_available()={torch.cuda.is_available()}  torch.cuda.device_count()={torch.cuda.device_count()}")
+
     data_manager = Data(config.data_path)
 
     data_manager.load_data(config.data_name)
