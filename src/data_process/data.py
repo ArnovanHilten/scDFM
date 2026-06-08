@@ -268,6 +268,30 @@ class Data:
             split_toml = kwargs.get('split_toml', '')
 
             if split_toml:
+                # ── Cell-line filter ──────────────────────────────────────────
+                # The STATE toml uses keys like "replogle.k562", meaning the
+                # held-out gene lists apply only to that cell line.  If the h5ad
+                # contains multiple cell lines, subset to the target cell line
+                # BEFORE building the split so that non-target-cell-line cells
+                # with target-cell-line test genes are not wrongly excluded.
+                if 'cell_line' in self.adata.obs.columns:
+                    import tomllib as _tl
+                    with open(split_toml, 'rb') as _f:
+                        _td = _tl.load(_f)
+                    _fewshot_keys = list(_td.get('fewshot', {}).keys())
+                    _target_lines = {k.split('.')[-1] for k in _fewshot_keys}
+                    _avail = set(self.adata.obs['cell_line'].unique())
+                    _matched = _target_lines & _avail
+                    if _matched:
+                        _target = sorted(_matched)[0]
+                        n_before = self.adata.n_obs
+                        self.adata = self.adata[self.adata.obs['cell_line'] == _target].copy()
+                        print(f'Cell-line filter: kept {_target!r} cells '
+                              f'({self.adata.n_obs:,} / {n_before:,})')
+                    else:
+                        print(f'Warning: toml cell lines {_target_lines} not found in '
+                              f'cell_line column ({_avail}); skipping cell-line filter')
+
                 # Use the explicit val/test perturbation lists from a STATE toml file
                 toml_stem  = os.path.splitext(os.path.basename(split_toml))[0]
                 split_file = os.path.join(self.data_path, self.data_name, f'split_results_scdfm_{toml_stem}.pkl')
