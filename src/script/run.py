@@ -347,8 +347,22 @@ if __name__ == "__main__":
             
             set_requires_grad_for_p_only(vf, p_only=config.mode)
             loss = train_step(source, target, perturbation_id, vf, criterion, accelerator, noise_type=config.noise_type, mode=config.mode)
+
+            if torch.isnan(loss) or torch.isinf(loss):
+                print(f"\n[FATAL] Loss is {loss.item()} at iteration {iteration}. Stopping training.")
+                if accelerator.is_main_process and config.wandb_project:
+                    try:
+                        import wandb
+                        if wandb.run is not None:
+                            wandb.log({'train/loss': loss.item()}, step=iteration)
+                            wandb.finish(exit_code=1)
+                    except Exception:
+                        pass
+                raise RuntimeError(f"NaN/Inf loss at iteration {iteration}. Check model inputs and architecture.")
+
             optimizer.zero_grad(set_to_none=True)
             accelerator.backward(loss)
+            torch.nn.utils.clip_grad_norm_(vf.parameters(), max_norm=1.0)
             optimizer.step()
             scheduler.step()
 

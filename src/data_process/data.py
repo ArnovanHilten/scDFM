@@ -268,29 +268,27 @@ class Data:
             split_toml = kwargs.get('split_toml', '')
 
             if split_toml:
-                # ── Cell-line filter ──────────────────────────────────────────
-                # The STATE toml uses keys like "replogle.k562", meaning the
-                # held-out gene lists apply only to that cell line.  If the h5ad
-                # contains multiple cell lines, subset to the target cell line
-                # BEFORE building the split so that non-target-cell-line cells
-                # with target-cell-line test genes are not wrongly excluded.
+                # ── Identify the competition cell line from toml fewshot key ──
+                # e.g. "replogle.k562" → "k562".  Val/test conditions are derived
+                # from that cell line only.  All other cell lines (jurkat, rpe1,
+                # hepg2, …) contribute ALL their cells to training, even if they
+                # share a perturbation gene with the val/test list.
+                import tomllib as _tl
+                with open(split_toml, 'rb') as _f:
+                    _td = _tl.load(_f)
+                _fewshot_keys = list(_td.get('fewshot', {}).keys())
+                _target_lines = {k.split('.')[-1] for k in _fewshot_keys}
+                target_cell_line = None
                 if 'cell_line' in self.adata.obs.columns:
-                    import tomllib as _tl
-                    with open(split_toml, 'rb') as _f:
-                        _td = _tl.load(_f)
-                    _fewshot_keys = list(_td.get('fewshot', {}).keys())
-                    _target_lines = {k.split('.')[-1] for k in _fewshot_keys}
                     _avail = set(self.adata.obs['cell_line'].unique())
                     _matched = _target_lines & _avail
                     if _matched:
-                        _target = sorted(_matched)[0]
-                        n_before = self.adata.n_obs
-                        self.adata = self.adata[self.adata.obs['cell_line'] == _target].copy()
-                        print(f'Cell-line filter: kept {_target!r} cells '
-                              f'({self.adata.n_obs:,} / {n_before:,})')
+                        target_cell_line = sorted(_matched)[0]
+                        print(f'Competition cell line: {target_cell_line!r} '
+                              f'(other cell lines are all-train)')
                     else:
                         print(f'Warning: toml cell lines {_target_lines} not found in '
-                              f'cell_line column ({_avail}); skipping cell-line filter')
+                              f'cell_line column ({_avail}); applying split to all cells')
 
                 # Use the explicit val/test perturbation lists from a STATE toml file
                 toml_stem  = os.path.splitext(os.path.basename(split_toml))[0]
@@ -299,27 +297,30 @@ class Data:
                     with open(split_file, 'rb') as f:
                         self.split_results = pickle.load(f)
                 else:
-                    import tomllib
-                    with open(split_toml, 'rb') as f:
-                        toml_data = tomllib.load(f)
                     val_genes  = set()
                     test_genes = set()
-                    for entry in toml_data.get('fewshot', {}).values():
+                    for entry in _td.get('fewshot', {}).values():
                         if isinstance(entry, dict):
                             if 'val'  in entry:
                                 val_genes.update(entry['val'])
                             if 'test' in entry:
                                 test_genes.update(entry['test'])
-                    all_conditions = np.unique(self.adata.obs['condition'])
-                    non_control    = [c for c in all_conditions if c != 'control']
-                    val_conditions  = [c for c in non_control if c.split('+')[0] in val_genes]
-                    test_conditions = [c for c in non_control if c.split('+')[0] in test_genes]
-                    # genes that appear in both → keep in test only
-                    test_set = set(test_conditions)
-                    val_conditions = [c for c in val_conditions if c not in test_set]
-                    held_out = set(val_conditions) | test_set
-                    train_conditions = [c for c in non_control if c not in held_out]
-                    print(f'STATE toml split: {len(train_conditions)} train / '
+
+                    # Derive val/test conditions from the target cell line only
+                    if target_cell_line and 'cell_line' in self.adata.obs.columns:
+                        tcl_obs = self.adata.obs[self.adata.obs['cell_line'] == target_cell_line]
+                        source_conds = set(tcl_obs['condition'].unique()) - {'control'}
+                    else:
+                        source_conds = set(self.adata.obs['condition'].unique()) - {'control'}
+
+                    test_set        = {c for c in source_conds if c.split('+')[0] in test_genes}
+                    val_set         = {c for c in source_conds if c.split('+')[0] in val_genes} - test_set
+                    val_conditions  = sorted(val_set)
+                    test_conditions = sorted(test_set)
+                    all_conditions  = set(self.adata.obs['condition'].unique()) - {'control'}
+                    train_conditions = sorted(all_conditions - val_set - test_set)
+                    print(f'STATE toml split ({target_cell_line or "all cells"}): '
+                          f'{len(train_conditions)} train / '
                           f'{len(val_conditions)} val / {len(test_conditions)} test perturbations')
                     self.split_results = [{'train': train_conditions,
                                            'val':   val_conditions,
@@ -356,31 +357,47 @@ class Data:
             fold = kwargs.get('fold', 0)
             sr   = self.split_results[fold]
             self.adata.obs['mode'] = 'train'
-            if sr.get('val'):
+
+            # Assign val/test only to cells from the competition cell line.
+            # Non-target cell lines always remain 'train'.
+            if split_toml and target_cell_line and 'cell_line' in self.adata.obs.columns:
+                tcl_mask = self.adata.obs['cell_line'] == target_cell_line
+                if sr.get('val'):
+                    self.adata.obs.loc[
+                        tcl_mask & self.adata.obs['condition'].isin(sr['val']), 'mode'
+                    ] = 'val'
                 self.adata.obs.loc[
-                    self.adata.obs['condition'].isin(sr['val']), 'mode'
-                ] = 'val'
-            self.adata.obs.loc[
-                self.adata.obs['condition'].isin(sr['test']), 'mode'
-            ] = 'test'
+                    tcl_mask & self.adata.obs['condition'].isin(sr['test']), 'mode'
+                ] = 'test'
+            else:
+                if sr.get('val'):
+                    self.adata.obs.loc[
+                        self.adata.obs['condition'].isin(sr['val']), 'mode'
+                    ] = 'val'
+                self.adata.obs.loc[
+                    self.adata.obs['condition'].isin(sr['test']), 'mode'
+                ] = 'test'
 
             self.adata_train = self.adata[self.adata.obs['mode'] == 'train']
 
-            # val set — used for periodic monitoring during training
+            # val/test sets include control cells from the competition cell line only
+            if split_toml and target_cell_line and 'cell_line' in self.adata.obs.columns:
+                tcl_ctrl_mask = tcl_mask & (self.adata.obs['control'] == 1)
+            else:
+                tcl_ctrl_mask = self.adata.obs['control'] == 1
+
             val_pert_mask = self.adata.obs['mode'] == 'val'
             if val_pert_mask.any():
-                self.adata_val = self.adata[val_pert_mask | (self.adata.obs['control'] == 1)]
+                self.adata_val = self.adata[val_pert_mask | tcl_ctrl_mask]
                 self._has_separate_test = True
             else:
-                # no explicit val split → monitor on test set (backward-compatible)
                 self.adata_val = self.adata[
-                    (self.adata.obs['mode'] == 'test') | (self.adata.obs['control'] == 1)
+                    (self.adata.obs['mode'] == 'test') | tcl_ctrl_mask
                 ]
                 self._has_separate_test = False
 
-            # test set — used for final evaluation only
             self.adata_test = self.adata[
-                (self.adata.obs['mode'] == 'test') | (self.adata.obs['control'] == 1)
+                (self.adata.obs['mode'] == 'test') | tcl_ctrl_mask
             ]
 
             sc.pp.highly_variable_genes(self.adata_val, inplace=True, n_top_genes=infer_top_gene)

@@ -204,15 +204,21 @@ class MultiheadDiffAttn(nn.Module):
         attn_weights_1 = torch.matmul(q_1, k_1.transpose(-1, -2))
         attn_weights_2 = torch.matmul(q_2, k_2.transpose(-1, -2))
 
+        attn_weights_1 = torch.nan_to_num(attn_weights_1)
+        attn_weights_2 = torch.nan_to_num(attn_weights_2)
+
         attn_weights_1 = torch.nn.functional.softmax(attn_weights_1, dim=-1, dtype=torch.float32).type_as(
             attn_weights_1
-        )  
+        )
         attn_weights_2 = torch.nn.functional.softmax(attn_weights_2, dim=-1, dtype=torch.float32).type_as(
             attn_weights_2
         )
 
-        lambda_1 = torch.exp(torch.sum(self.lambda_q1 * self.lambda_k1, dim=-1).float()).type_as(q_1)
-        lambda_2 = torch.exp(torch.sum(self.lambda_q2 * self.lambda_k2, dim=-1).float()).type_as(q_1)
+        # clamp dot-products before exp to prevent inf - inf = NaN in lambda_full
+        dot_1 = torch.sum(self.lambda_q1 * self.lambda_k1, dim=-1).float().clamp(-10, 10)
+        dot_2 = torch.sum(self.lambda_q2 * self.lambda_k2, dim=-1).float().clamp(-10, 10)
+        lambda_1 = torch.exp(dot_1).type_as(q_1)
+        lambda_2 = torch.exp(dot_2).type_as(q_1)
 
         lambda_full = lambda_1 - lambda_2 + self.lambda_init
         attn_weights = attn_weights_1 - lambda_full * attn_weights_2
