@@ -202,6 +202,16 @@ def test(data_sampler, vf, accelerator,  batch_size=128, path='./',vocab=None,sc
         
         results.write_csv(os.path.join(path, 'results.csv'))
         agg_results.write_csv(os.path.join(path, 'agg_results.csv'))
+        # anndata's h5ad writer can't serialize pandas ArrowStringArray (the
+        # default string backing in this env), which shows up as the obs index
+        # (_index) and string columns. Coerce them to plain numpy object dtype.
+        for _adata in (pred, real):
+            _adata.obs.index = np.asarray(_adata.obs.index.astype(str), dtype=object)
+            for _col in _adata.obs.columns:
+                if isinstance(_adata.obs[_col].dtype, pd.CategoricalDtype) or \
+                        pd.api.types.is_numeric_dtype(_adata.obs[_col]):
+                    continue
+                _adata.obs[_col] = np.asarray(_adata.obs[_col].astype(str), dtype=object)
         pred.write_h5ad(os.path.join(path, 'pred.h5ad'))
         real.write_h5ad(os.path.join(path, 'real.h5ad'))
 
