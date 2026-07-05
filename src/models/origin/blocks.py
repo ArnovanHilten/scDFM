@@ -1,6 +1,7 @@
 import pdb
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch import Tensor
 from typing import Optional, Dict, Tuple
 import math
@@ -198,21 +199,20 @@ class MultiheadDiffAttn(nn.Module):
         q_2 = q_2.transpose(1, 2)
         k_1 = k_1.transpose(1, 2)
         k_2 = k_2.transpose(1, 2)
-        q_1 *= self.scaling
-        q_2 *= self.scaling
+        v = v.transpose(1, 2)
+        # q_1, q_2: (bsz, num_heads, tgt_len, head_dim)
+        # k_1, k_2, v: (bsz, num_heads, src_len, head_dim)
 
-        attn_weights_1 = torch.matmul(q_1, k_1.transpose(-1, -2))
-        attn_weights_2 = torch.matmul(q_2, k_2.transpose(-1, -2))
-
-        attn_weights_1 = torch.nan_to_num(attn_weights_1)
-        attn_weights_2 = torch.nan_to_num(attn_weights_2)
-
-        attn_weights_1 = torch.nn.functional.softmax(attn_weights_1, dim=-1, dtype=torch.float32).type_as(
-            attn_weights_1
-        )
-        attn_weights_2 = torch.nn.functional.softmax(attn_weights_2, dim=-1, dtype=torch.float32).type_as(
-            attn_weights_2
-        )
+        # Differential attention is linear in V and lambda_full is a per-head
+        # scalar, so
+        #   (softmax(Q1 K1^T) - lambda*softmax(Q2 K2^T)) V
+        #     = softmax(Q1 K1^T) V  -  lambda * (softmax(Q2 K2^T) V)
+        # Each term is a plain attention, so route both through SDPA (flash /
+        # memory-efficient kernel) and never materialize the (tgt_len x src_len)
+        # score matrix. SDPA's default scale is head_dim**-0.5 == self.scaling,
+        # so we no longer pre-scale q.
+        attn_1 = F.scaled_dot_product_attention(q_1, k_1, v)
+        attn_2 = F.scaled_dot_product_attention(q_2, k_2, v)
 
         # clamp dot-products before exp to prevent inf - inf = NaN in lambda_full
         dot_1 = torch.sum(self.lambda_q1 * self.lambda_k1, dim=-1).float().clamp(-10, 10)
@@ -221,11 +221,9 @@ class MultiheadDiffAttn(nn.Module):
         lambda_2 = torch.exp(dot_2).type_as(q_1)
 
         lambda_full = lambda_1 - lambda_2 + self.lambda_init
-        attn_weights = attn_weights_1 - lambda_full * attn_weights_2
 
-
-        attn = torch.matmul(attn_weights, v.transpose(1,2))
-        # attn: (bsz, num_heads, tgt_len, head_dim)        
+        attn = attn_1 - lambda_full * attn_2
+        # attn: (bsz, num_heads, tgt_len, head_dim)
         attn = self.subln(attn)
         attn = attn * (1 - self.lambda_init)
         attn = attn.transpose(1, 2).reshape(bsz, tgt_len, self.num_heads * self.head_dim)
