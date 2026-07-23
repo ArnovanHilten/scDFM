@@ -30,6 +30,12 @@ import numpy as np
 from cell_eval import MetricsEvaluator
 import anndata as ad
 import pandas as pd
+# This environment turns every pandas string into a pyarrow-backed
+# ArrowStringArray (via future.infer_string / string_storage="pyarrow").
+# anndata's h5ad writer has no serializer for that type, so it fails writing
+# the obs index and categorical category labels. Revert to legacy object-dtype
+# strings globally so nothing anndata touches is ever Arrow-backed.
+pd.set_option("future.infer_string", False)
 from src.utils.utils import save_checkpoint, load_checkpoint, make_lognorm_poisson_noise, pick_eval_score, process_vocab, set_requires_grad_for_p_only, get_perturbation_emb
 
 ot_sampler = OTPlanSampler(method="exact") 
@@ -183,8 +189,8 @@ def test(data_sampler, vf, accelerator,  batch_size=128, path='./',vocab=None,sc
 
     all_pred_expressions = np.concatenate(all_pred_expressions, axis=0)
     all_target_expressions = np.concatenate(all_target_expressions, axis=0)
-    obs_pred = pd.DataFrame({'perturbation':obs_perturbation_name_pred})
-    obs_real = pd.DataFrame({'perturbation':obs_perturbation_name_real})
+    obs_pred = pd.DataFrame({'perturbation': pd.array(obs_perturbation_name_pred, dtype=object)})
+    obs_real = pd.DataFrame({'perturbation': pd.array(obs_perturbation_name_real, dtype=object)})
     pred = ad.AnnData(X=all_pred_expressions, obs=obs_pred)
     real = ad.AnnData(X=all_target_expressions, obs=obs_real)
     
@@ -202,13 +208,6 @@ def test(data_sampler, vf, accelerator,  batch_size=128, path='./',vocab=None,sc
         
         results.write_csv(os.path.join(path, 'results.csv'))
         agg_results.write_csv(os.path.join(path, 'agg_results.csv'))
-        # anndata's h5ad writer can't serialize pandas ArrowStringArray, which
-        # is how the obs index gets backed when pandas string inference is on.
-        # A plain object ndarray gets re-inferred back to an Arrow string array
-        # on assignment, so dtype=object must be passed to the Index constructor
-        # itself for the object dtype to stick.
-        for _adata in (pred, real):
-            _adata.obs.index = pd.Index([str(x) for x in _adata.obs.index], dtype=object)
         pred.write_h5ad(os.path.join(path, 'pred.h5ad'))
         real.write_h5ad(os.path.join(path, 'real.h5ad'))
 
